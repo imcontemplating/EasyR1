@@ -1,2 +1,2 @@
 # EasyR1
-EasyR1 tests codes and the model
+EasyR1 tests codes.
