@@ -16,6 +16,16 @@ To enable dynamic scaling, we modified the core trainer logic to adjust the KL p
 The following changes were applied to the EasyR1 codebase:
 
 #### 1. Configuration Update
+
+Define the `kl_scaling` field to the AlgorithmConfig dataclass.
+```python
+# verl/trainer/config.py
+@dataclass
+class AlgorithmConfig:
+    # ... existing parameters ...
+    kl_scaling: str = "none"  # kl_scaling types: none, linear, sqrt, log
+```
+
 Added a `kl_scaling` parameter to `config.yaml` to select the decay strategy.
 ```yaml
 # config/examples/config.yaml
