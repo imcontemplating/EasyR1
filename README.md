@@ -81,16 +81,16 @@ To validate the hypothesis, we conducted a controlled experiment comparing four 
 
 ### Variables
 We tested the following 4 conditions:
-1.  **None:** Control group. KL penalty remains constant.
-2.  **Linear:** Moderate decay.
-3.  **Sqrt:** Fast decay. Penalty approaches 0 very quickly.
-4.  **Log:** Slow decay. Retains some constraint for longer.
+1.  **None:** Control group. The standard approach used in most RLHF pipelines.
+2.  **Linear:** Fast decay.
+3.  **Square Root:** Moderate. This tests a middle ground between Linear and Log. Surprisingly, this strategy yielded the worst performance.
+4.  **Log:** Slow decay. 
 
 ---
 
 ##  Results
 
-We evaluated four different KL penalty scaling schedules: **None (Baseline), Linear, Sqrt, and Log**. Each variable vas conducted over 500 training steps, and we measured both the final validation accuracy and the performance decline relative to Step 0.
+We evaluated four different KL penalty scaling schedules: **None (Baseline), Linear, Square Root, and Log**. Each variable vas conducted over 500 training steps, and we measured both the final validation accuracy and the performance decline relative to Step 0.
 
 ### 1. Key Finding: Log Scaling Performs Best
 Our results demonstrate that **Logarithmic scaling** is the optimal strategy, outperforming both the baseline and other scaling variants.
