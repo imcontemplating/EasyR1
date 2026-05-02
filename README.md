@@ -1,48 +1,54 @@
-# EasyR1 with Dynamic KL Scaling 
+# The Constraint Cliff: How KL Penalty Decay Schedules Govern Training Stability in RLHF
 
-This repository contains a modified version of **EasyR1**, implementing **Dynamic KL Divergence Scaling** strategies for PPO training.
-
-**Goal:**
-The primary objective of this project is to **evaluate and compare four distinct KL penalty scaling schedules** (Constant, Linear, Square Root, and Logarithmic). We aim to **identify the optimal decay strategy** that maximizes the model's reasoning capabilities by allowing efficient exploration, while preventing catastrophic forgetting or alignment drift.
+This repository contains the implementation for our ICML 2026 Workshop paper. We modify the [EasyR1](https://github.com/hiyouga/EasyR1) framework to support **dynamic KL penalty scaling** in GRPO-based reinforcement learning, and provide all code necessary to reproduce our experiments.
 
 ---
 
-##  Implementation Details
+## Overview
 
-To enable dynamic scaling, we modified the core trainer logic to adjust the KL penalty based on the current `global_step`.
+Standard RLHF pipelines apply a constant KL divergence penalty throughout training. We investigate whether time-varying penalty schedules can improve the trade-off between exploration and stability. We evaluate four schedules:
 
-### Key Modifications
+| Schedule | $\alpha(t)$ | Effective penalty at step 500 |
+|:---|:---|:---|
+| No Decay (baseline) | $1$ | 100% |
+| Logarithmic | $1/\ln(t+1)$ | ≈ 16.1% |
+| Square Root | $1/\sqrt{t}$ | ≈ 4.5% |
+| Linear | $1/t$ | ≈ 0.2% |
 
-The following changes were applied to the EasyR1 codebase:
+**Key findings:**
 
-#### 1. Configuration Update
+- **Logarithmic decay** achieves the highest validation accuracy (0.462 vs. 0.452 baseline) while maintaining stable KL dynamics — a zero-cost improvement.
+- **Polynomial decays** (Linear and Square Root) both degrade performance below the constant baseline, exhibiting chaotic KL divergence spikes.
+- We introduce the **Constraint Cliff** framework to explain this dichotomy: a critical transition beyond which policy divergence exceeds the reward model's reliable region, triggering self-reinforcing collapse.
 
-Define the `kl_scaling` field to the AlgorithmConfig dataclass.
+---
+
+## Implementation
+
+The modification consists of a single function override. No other changes to the EasyR1 codebase are required.
+
+### 1. Configuration
+
+Added `kl_scaling` to `AlgorithmConfig`:
+
 ```python
 # verl/trainer/config.py
 @dataclass
 class AlgorithmConfig:
     # ... existing parameters ...
-    kl_scaling: str = "none"  # kl_scaling types: none, linear, sqrt, log
+    kl_scaling: str = "none"  # options: none, linear, sqrt, log
 ```
 
-Added a `kl_scaling` parameter to `config.yaml` to select the decay strategy.
 ```yaml
-# config/examples/config.yaml
+# examples/config.yaml
 algorithm:
-  kl_scaling: none # options: none, linear, sqrt, log
+  kl_scaling: log  # options: none, linear, sqrt, log
 ```
 
-#### 2. Scaling Logic
-We modified `apply_kl_penalty` to accept `global_step` and calculate a scaling factor $\alpha$.
+### 2. Scaling Logic
 
-**The Scaling Formulas:**
-* **None (Baseline):** $\alpha = 1.0$
-* **Linear:** $\alpha = \frac{1}{t}$
-* **Sqrt:** $\alpha = \frac{1}{\sqrt{t}}$
-* **Log:** $\alpha = \frac{1}{\ln(t + 1)}$
+Modified `apply_kl_penalty` in `verl/trainer/ray_trainer.py` to compute a dynamic scaling factor $\alpha(t)$ at each training step:
 
-**Code Implementation:**
 ```python
 import math
 
@@ -62,72 +68,112 @@ else:
 data.batch["token_level_rewards"] = token_level_scores - kl_ctrl.kl_coef * kld * scale
 ```
 
-#### 3. Trainer Integration
-Updated the training loop to pass the current step count to the penalty function:
+### 3. Trainer Integration
+
+Updated the training loop to pass step count and scaling mode:
+
 ```python
 # Inside trainer/ray_trainer.py (fit function)
 batch, kl_metrics = apply_kl_penalty(
     batch,
     self.kl_ctrl,
     self.config.algorithm.kl_penalty,
-    global_step=self.global_step,          # Added
-    kl_scaling=self.config.algorithm.kl_scaling # Added
+    global_step=self.global_step,
+    kl_scaling=self.config.algorithm.kl_scaling
 )
 ```
 
 ---
 
-##  Experiment Methodology
-
-To validate the hypothesis, we conducted a controlled experiment comparing four different scaling strategies.
+## Reproducing the Experiments
 
 ### Setup
-* **Model:** Qwen 2.5 1.5B Instruct
-* **Task:** Mathematical Reasoning (Reward based on correct answer format and accuracy)
-* **Algorithm:** GRPO / PPO
-* **Training Duration:** 500 Steps per experiment
-* **Compute:** 2x GPUs
-* **Baseline:** `kl_scaling="none"` (Standard constant KL penalty)
 
-### Variables
-We tested the following 4 conditions:
-1.  **None:** Control group. The standard approach used in most RLHF pipelines.
-2.  **Linear:** Fast decay.
-3.  **Square Root:** Moderate. This tests a middle ground between Linear and Log. Surprisingly, this strategy yielded the worst performance.
-4.  **Log:** Slow decay. 
+```bash
+git clone https://github.com/imcontemplating/EasyR1.git
+cd EasyR1
+pip install -e .
+```
+
+### Training
+
+Run all four schedule variants:
+
+```bash
+EXPERIMENTS=("none" "linear" "sqrt" "log")
+
+for MODE in "${EXPERIMENTS[@]}"; do
+    python3 -m verl.trainer.main \
+        config=examples/config.yaml \
+        algorithm.adv_estimator=grpo \
+        trainer.max_steps=500 \
+        trainer.n_gpus_per_node=2 \
+        trainer.logger='["console", "file"]' \
+        trainer.save_freq=5 \
+        trainer.val_freq=5 \
+        worker.actor.strategy=fsdp \
+        worker.rollout.name=vllm \
+        worker.rollout.n=8 \
+        worker.rollout.gpu_memory_utilization=0.5 \
+        worker.rollout.tensor_parallel_size=1 \
+        worker.rollout.enforce_eager=true \
+        worker.reward.reward_function=examples/reward_function/math.py \
+        worker.reward.reward_function_name=compute_score \
+        worker.actor.model.model_path=Qwen/Qwen2.5-1.5B-Instruct \
+        worker.critic.model.model_path=Qwen/Qwen2.5-1.5B-Instruct \
+        algorithm.kl_scaling=${MODE} \
+        algorithm.use_kl_loss=False \
+        trainer.experiment_name=qwen2_5_1_5b_math_grpo_${MODE}
+done
+```
+
+### Key Hyperparameters
+
+| Parameter | Value |
+|:---|:---|
+| Base model | Qwen2.5-1.5B-Instruct |
+| Training data | Math12K (train split) |
+| Evaluation data | Math12K (test split) |
+| Advantage estimator | GRPO |
+| Rollout samples per prompt | 8 |
+| KL penalty coefficient $\beta_0$ | 0.01 |
+| KL penalty type | Low-variance KL |
+| KL controller | Fixed |
+| Learning rate | 1e-6 (AdamW) |
+| Max prompt / response length | 2048 / 2048 tokens |
+| Rollout batch size | 512 |
+| Actor global batch size | 128 |
+| Training steps | 500 |
+| Hardware | 2× A100 (80GB) |
 
 ---
 
-##  Results
+## Results
 
-We evaluated four different KL penalty scaling schedules: **None (Baseline), Linear, Square Root, and Log**. Each variable vas conducted over 500 training steps, and we measured both the final validation accuracy and the performance decline relative to Step 0.
+| Schedule | Final Val Acc | Peak Acc | Peak Step | Post-Peak Decline |
+|:---|:---|:---|:---|:---|
+| **Log** ($1/\ln(t{+}1)$) | **0.462** | 0.560 | 15 | −0.098 |
+| No Decay | 0.452 | 0.548 | 15 | −0.096 |
+| Linear ($1/t$) | 0.436 | 0.556 | 15 | −0.120 |
+| Sqrt ($1/\sqrt{t}$) | 0.430 | 0.544 | 15 | −0.114 |
 
-### 1. Key Finding: Log Scaling Performs Best
-Our results demonstrate that **Logarithmic scaling** is the optimal strategy, outperforming both the baseline and other scaling variants.
-
-| Variant | Val Accuracy | Decline from Step 100 | Performance |
-| :--- | :--- | :--- | :--- |
-| **log** | **0.462** | **-0.022** (Smallest) |  **Best** |
-| none | 0.452 | -0.038 | Baseline |
-| linear | 0.436 | -0.058 | Worse than baseline |
-| sqrt | 0.430 | -0.066 | Worse than baseline |
-
-*Table 1: Final validation accuracy and performance stability across scaling strategies.*
-
-### 2. Analysis & Interpretation
-
-* **The "Sweet Spot" of Log Scaling:** Log scaling provided the highest final validation accuracy (**0.462**) and the smallest performance decline (**-0.022**). This suggests that a gentle reduction in KL penalty offers the ideal balance—it provides the model enough freedom to explore and learn, while maintaining sufficient constraint to prevent mode collapse or catastrophic forgetting. This aligns with theory, as $log(n)$ grows slowly, resulting in a gradual penalty reduction.
-
-* **Aggressive Scaling Hurts Performance:** Contrary to the hypothesis that *any* decay is better than none, we found that **Linear** and **Sqrt** scaling actually performed **worse than the baseline**. These strategies reduce the penalty too aggressively, allowing for too much drift and causing the model to lose alignment with the reference policy.
-
-### 3. Comparison to State-of-the-Art (R-FEW)
-Our findings offer an interesting contrast to methods like **R-FEW**, which utilizes 5% human anchor data to prevent reward hacking and drift.
-* **Data-Free Stability:** We show that **Log scaling** can help prevent drift and maintain stability *without* requiring any additional human anchor data.
-* **Complementary Approaches:** Since our method is a purely algorithmic change (modifying the penalty scheduler), it is complementary to data-centric approaches like R-FEW. Future work could combine both methods for potentially superior results.
-
-### 4. Conclusion
-This experiment identifies a "free improvement" for PPO training. By implementing a simple, one-line code change to use **Logarithmic KL scaling**, we achieved better performance and stability than the standard constant penalty.
+For detailed analysis, including the theoretical derivation of KL divergence growth bounds and the Constraint Cliff framework, please refer to the paper.
 
 ---
 
+## Citation
 
+```bibtex
+@inproceedings{anonymous2026constraint,
+  title     = {The Constraint Cliff: How {KL} Penalty Decay Schedules Govern Training Stability in {RLHF}},
+  author    = {Anonymous},
+  booktitle = {ICML 2026 Workshop on Reinforcement Learning from World Feedback (RLxF)},
+  year      = {2026}
+}
+```
+
+---
+
+## Acknowledgments
+
+This project builds on [EasyR1](https://github.com/hiyouga/EasyR1) by Zheng et al.
