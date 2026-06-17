@@ -1,6 +1,7 @@
 # The Constraint Cliff: How KL Penalty Decay Schedules Govern Training Stability in RLHF
 
 This repository contains the implementation for our paper *The Constraint Cliff: How KL Penalty Decay Schedules Govern Training Stability in RLHF*. We modify the [EasyR1](https://github.com/hiyouga/EasyR1) framework to support **dynamic KL penalty scaling** in GRPO-based reinforcement learning, and provide all code necessary to reproduce our experiments.
+
 ---
 
 ## Overview
