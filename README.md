@@ -164,11 +164,10 @@ For detailed analysis, including the theoretical derivation of KL divergence gro
 ## Citation
 
 ```bibtex
-@inproceedings{anonymous2026constraint,
-  title     = {The Constraint Cliff: How {KL} Penalty Decay Schedules Govern Training Stability in {RLHF}},
-  author    = {Anonymous},
-  booktitle = {ICML 2026 Workshop on Reinforcement Learning from World Feedback (RLxF)},
-  year      = {2026}
+@misc{shi2026constraint,
+  title  = {The Constraint Cliff: How {KL} Penalty Decay Schedules Govern Training Stability in {RLHF}},
+  author = {TODO},
+  year   = {2026}
 }
 ```
 
